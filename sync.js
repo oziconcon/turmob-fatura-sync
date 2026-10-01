@@ -88,7 +88,7 @@ async function scrapeFaturaList(page, urlPath, tip) {
   minDate.setDate(minDate.getDate() - 90);
   const dateStr = minDate.toISOString().slice(0,10);
 
-  await page.goto(`${TURMOB_URL}${urlPath}?minDate=${dateStr}`, { waitUntil: "networkidle" });
+  await page.goto(`${TURMOB_URL}${urlPath}?minDate=${dateStr}`, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForTimeout(3000);
 
   const rows = await page.evaluate(() => {
@@ -132,11 +132,11 @@ async function main() {
 
   // Login
   console.log("Giriş yapılıyor...");
-  await page.goto(TURMOB_URL, { waitUntil: "networkidle" });
+  await page.goto(TURMOB_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.fill('input[type="text"]',     USER);
   await page.fill('input[type="password"]', PASS);
   await page.click('button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: "networkidle" }).catch(() => {});
+  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
   await page.waitForTimeout(2000);
 
   const loginUrl = page.url();
