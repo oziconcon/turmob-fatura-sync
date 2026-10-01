@@ -1,9 +1,6 @@
 /**
  * TURMOB e-Fatura Sync
- * Portaldaki faturalari okuyup Supabase'e yazar.
- * Her gece GitHub Actions ile otomatik calisir.
  */
-
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -20,12 +17,13 @@ if (!SUPA_URL || !SUPA_KEY) throw new Error("SUPABASE_URL / SUPABASE_ANON_KEY ek
 
 const supabase = createClient(SUPA_URL, SUPA_KEY);
 
-function normTR(s = "") {
-  return s.toUpperCase()
-    .replace(/I\u0307/g,"I").replace(/[\u011e\u011f]/g,"G")
-    .replace(/[\xdc\xfc]/g,"U").replace(/[\u015e\u015f]/g,"S")
-    .replace(/[\xd6\xf6]/g,"O").replace(/[\xc7\xe7]/g,"C")
-    .replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
+function normTR(s) {
+  s = (s || "").toUpperCase();
+  s = s.replace(/\u0130/g,"I").replace(/[\u011e\u011f]/g,"G")
+       .replace(/[\xdc\xfc]/g,"U").replace(/[\u015e\u015f]/g,"S")
+       .replace(/[\xd6\xf6]/g,"O").replace(/[\xc7\xe7]/g,"C")
+       .replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
+  return s;
 }
 
 function similarity(a, b) {
@@ -40,7 +38,9 @@ function similarity(a, b) {
   const aWords = a.split(" ");
   const bWords = b.split(" ");
   let wordMatch = 0;
-  for (const w of aWords) if (w.length > 2 && bWords.some(bw => bw.includes(w) || w.includes(bw))) wordMatch++;
+  for (const w of aWords) {
+    if (w.length > 2 && bWords.some(bw => bw.includes(w) || w.includes(bw))) wordMatch++;
+  }
   return (matches / longer.length) * 0.6 + (wordMatch / Math.max(aWords.length, 1)) * 0.4;
 }
 
@@ -59,16 +59,27 @@ function matchMusteri(ad, liste) {
   return bestScore >= 0.45 ? best : null;
 }
 
-function parseTutar(s = "") {
-  const m = s.trim().match(/^([\d.,]+)\s*([A-Z]{3})?$/);
+function parseTutar(s) {
+  s = (s || "").trim();
+  const m = s.match(/^([\d.,]+)\s*([A-Z]{3})?$/);
   if (!m) return { tutar: 0, para_birimi: "TRY" };
   const sayi = parseFloat(m[1].replace(/\./g,"").replace(",",".")) || 0;
   return { tutar: sayi, para_birimi: m[2] || "TRY" };
 }
 
-function parseDate(s = "") {
-  const m = s.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+function parseDate(s) {
+  const m = (s||"").match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   return m ? m[3]+"-"+m[2].padStart(2,"0")+"-"+m[1].padStart(2,"0") : null;
+}
+
+// navigate without waiting - fire & wait fixed delay
+async function gotoWait(page, url, waitMs) {
+  console.log("  Navigating: " + url);
+  page.goto(url, { timeout: 0 }).catch(e =>
+    console.log("  [nav] " + e.message.split("\n")[0])
+  );
+  await page.waitForTimeout(waitMs);
+  console.log("  URL after wait: " + page.url());
 }
 
 async function scrapeFaturaList(page, urlPath, tip) {
@@ -77,9 +88,7 @@ async function scrapeFaturaList(page, urlPath, tip) {
   const dateStr = minDate.toISOString().slice(0,10);
   const url = TURMOB_URL + urlPath + "?minDate=" + dateStr;
 
-  // "commit" = HTTP yaniti alininca devam et, sayfanin yuklenmesini bekleme
-  await page.goto(url, { waitUntil: "commit", timeout: 60000 });
-  await page.waitForTimeout(8000);
+  await gotoWait(page, url, 12000);
 
   const rows = await page.evaluate(() => {
     return Array.from(document.querySelectorAll("table tbody tr"))
@@ -87,7 +96,7 @@ async function scrapeFaturaList(page, urlPath, tip) {
       .filter(r => r.length > 3);
   });
 
-  console.log("  " + tip + ": " + rows.length + " satir bulundu");
+  console.log("  " + tip + ": " + rows.length + " satir");
   return rows.map(r => ({ tip, raw: r }));
 }
 
@@ -108,24 +117,33 @@ async function main() {
 
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.setDefaultNavigationTimeout(0);
+  page.setDefaultTimeout(30000);
 
-  // Login - "commit" ile sadece HTTP yaniti beklenir
+  console.log("Login sayfasi yukleniyor...");
+  await gotoWait(page, TURMOB_URL, 15000);
+
+  const pageUrl = page.url();
+  console.log("URL: " + pageUrl);
+  if (pageUrl === "about:blank" || pageUrl === "") {
+    throw new Error("Sayfa yuklenemedi - sunucuya ulasılamiyor: " + TURMOB_URL);
+  }
+
   console.log("Giris yapiliyor...");
-  await page.goto(TURMOB_URL, { waitUntil: "commit", timeout: 60000 });
-  await page.waitForTimeout(6000);
-  console.log("Login sayfasi yuklendi: " + page.url());
-
   await page.fill('input[type="text"]', USER);
   await page.fill('input[type="password"]', PASS);
   await page.click('button[type="submit"]');
-  
-  // Login sonrasi yonlendirmeyi bekle
-  await page.waitForTimeout(8000);
+  await page.waitForTimeout(10000);
 
   const loginUrl = page.url();
   console.log("Login sonrasi URL: " + loginUrl);
-  if (loginUrl.toLowerCase().includes("login")) {
-    throw new Error("Giris basarisiz! URL hala login iceriyor: " + loginUrl);
+  if (loginUrl.toLowerCase().includes("login") || loginUrl === pageUrl) {
+    await page.waitForTimeout(5000);
+    const url2 = page.url();
+    console.log("URL (retry): " + url2);
+    if (url2.toLowerCase().includes("login") || url2 === pageUrl) {
+      throw new Error("Giris basarisiz - URL degismedi: " + url2);
+    }
   }
   console.log("Giris basarili");
 
