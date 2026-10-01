@@ -22,8 +22,9 @@ const supabase = createClient(SUPA_URL, SUPA_KEY);
 
 function normTR(s = "") {
   return s.toUpperCase()
-    .replace(/\u0130/g,"I").replace(/\u011e/g,"G").replace(/\xdc/g,"U")
-    .replace(/\u015e/g,"S").replace(/\xd6/g,"O").replace(/\xc7/g,"C")
+    .replace(/I\u0307/g,"I").replace(/[\u011e\u011f]/g,"G")
+    .replace(/[\xdc\xfc]/g,"U").replace(/[\u015e\u015f]/g,"S")
+    .replace(/[\xd6\xf6]/g,"O").replace(/[\xc7\xe7]/g,"C")
     .replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
 }
 
@@ -76,8 +77,9 @@ async function scrapeFaturaList(page, urlPath, tip) {
   const dateStr = minDate.toISOString().slice(0,10);
   const url = TURMOB_URL + urlPath + "?minDate=" + dateStr;
 
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120000 });
-  await page.waitForTimeout(4000);
+  // "commit" = HTTP yaniti alininca devam et, sayfanin yuklenmesini bekleme
+  await page.goto(url, { waitUntil: "commit", timeout: 60000 });
+  await page.waitForTimeout(8000);
 
   const rows = await page.evaluate(() => {
     return Array.from(document.querySelectorAll("table tbody tr"))
@@ -102,35 +104,41 @@ function parseFaturaRow(raw, tip) {
 
 async function main() {
   const musteriler = await getMusteriler();
-  console.log("\u2713 " + musteriler.length + " musteri Supabase'den alindi");
+  console.log("Musteriler: " + musteriler.length);
 
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
+  // Login - "commit" ile sadece HTTP yaniti beklenir
   console.log("Giris yapiliyor...");
-  await page.goto(TURMOB_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
+  await page.goto(TURMOB_URL, { waitUntil: "commit", timeout: 60000 });
+  await page.waitForTimeout(6000);
+  console.log("Login sayfasi yuklendi: " + page.url());
+
   await page.fill('input[type="text"]', USER);
   await page.fill('input[type="password"]', PASS);
   await page.click('button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 120000 }).catch(() => {});
-  await page.waitForTimeout(3000);
+  
+  // Login sonrasi yonlendirmeyi bekle
+  await page.waitForTimeout(8000);
 
   const loginUrl = page.url();
+  console.log("Login sonrasi URL: " + loginUrl);
   if (loginUrl.toLowerCase().includes("login")) {
-    throw new Error("Giris basarisiz! Kullanici adi/sifre kontrol edin.");
+    throw new Error("Giris basarisiz! URL hala login iceriyor: " + loginUrl);
   }
-  console.log("\u2713 Giris basarili - " + loginUrl);
+  console.log("Giris basarili");
 
   const allRows = [];
   try {
     const efatura = await scrapeFaturaList(page, "/OutgoingInvoice/OutgoingInvoiceList", "efatura");
     allRows.push(...efatura);
-  } catch(e) { console.error("e-Fatura listesi hatasi:", e.message); }
+  } catch(e) { console.error("e-Fatura hatasi:", e.message); }
 
   try {
     const earsiv = await scrapeFaturaList(page, "/OutgoingInvoice/OutgoingArchiveList", "earsiv");
     allRows.push(...earsiv);
-  } catch(e) { console.error("e-Arsiv listesi hatasi:", e.message); }
+  } catch(e) { console.error("e-Arsiv hatasi:", e.message); }
 
   await browser.close();
 
@@ -139,7 +147,7 @@ async function main() {
     return;
   }
 
-  console.log("\nToplam " + allRows.length + " satir islenecek...");
+  console.log("Toplam " + allRows.length + " satir...");
 
   let eklenen = 0, atlanan = 0, eslesmeyen = 0;
 
@@ -149,7 +157,7 @@ async function main() {
 
     const musteri = matchMusteri(parsed.alici, musteriler);
     if (!musteri) {
-      console.warn("  Musteri esleshmedi: " + parsed.alici);
+      console.warn("  Eslesmedi: " + parsed.alici);
       eslesmeyen++;
       continue;
     }
@@ -179,10 +187,7 @@ async function main() {
     } else { eklenen++; }
   }
 
-  console.log("\nSync tamamlandi:");
-  console.log("  " + eklenen + " fatura eklendi/guncellendi");
-  console.log("  " + eslesmeyen + " fatura musteri eslesmedi");
-  console.log("  " + atlanan + " satir atlandi");
+  console.log("Sync tamamlandi: " + eklenen + " eklendi, " + eslesmeyen + " eslesmedi, " + atlanan + " atlandi");
 }
 
 main().catch(e => { console.error("HATA:", e.message); process.exit(1); });
