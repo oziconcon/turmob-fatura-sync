@@ -8,14 +8,25 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
+
       - run: npm ci
+
       - run: npx playwright install chromium --with-deps
+
+      - name: Baglanti testi
+        run: |
+          echo "=== curl test ==="
+          curl -v --connect-timeout 30 --max-time 60 https://turmobefatura.luca.com.tr/ 2>&1 | head -100 || echo "CURL HATASI: $?"
+        continue-on-error: true
+
       - name: Sync
         env:
           TURMOB_USER: ${{ secrets.TURMOB_USER }}
